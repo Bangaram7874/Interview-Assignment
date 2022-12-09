@@ -1,0 +1,81 @@
+Create the ECS IAM Role, an ELB
+
+# aws ecs create-service --cluster default --service-name flask-signup-service --task-definition flask-signup --load-balancers loadBalancerName=elb-flask-signup-1985465812,containerName=flask-signup,containerPort=5000 --role ecs-service-role --desired-count 0
+{
+    "service": {
+        "status": "ACTIVE",
+        "taskDefinition": "arn:aws:ecs:us-east-1:123456789012:task-definition/flask-signup:1",
+        "desiredCount": 0,
+        "serviceName": "flask-signup-service",
+        "clusterArn": "arn:aws:ecs:us-east-1:123456789012:cluster/default",
+        "serviceArn": "arn:aws:ecs:us-east-1:123456789012:service/flask-signup-service",
+        "runningCount": 0
+    }
+}
+
+Install and configure Jenkins, Docker
+
+Connect to your instance using your private key and switch to the root user. First, let’s update the repositories and install Docker, Nginx and Git.
+# yum update -y
+# yum install -y docker nginx git
+To install Jenkins on Amazon Linux, we need to add the Jenkins repository and install Jenkins from there.
+# wget -O /etc/yum.repos.d/jenkins.repo http://pkg.jenkins-ci.org/redhat/jenkins.repo
+# rpm --import http://pkg.jenkins-ci.org/redhat/jenkins-ci.org.key
+# yum install jenkins
+
+As Jenkins typically uses port TCP/8080, we’ll configure Nginx as a proxy. Edit the Nginx config file (/etc/nginx/nginx.conf) and change the server configuration to look like this:
+server {
+    listen       80;
+    server_name  _;
+
+    location / {
+            proxy_pass http://127.0.0.1:8080;
+    }
+}
+
+We’ll be using Jenkins to build our Docker images, so we need to add the jenkins user to the docker group. A reboot may be required for the changes to take effect.
+# usermod -a -G docker jenkins
+Start the Docker, Jenkins and Nginx services and make sure they will be running after a reboot:
+# service docker start
+# service jenkins start
+# service nginx start
+# chkconfig docker on
+# chkconfig jenkins on
+# chkconfig nginx on
+
+Create the ECS IAM Role, an ELB and your service definition
+
+# aws ecs create-service --cluster default --service-name flask-signup-service --task-definition flask-signup --load-balancers loadBalancerName=elb-flask-signup-1985465812,containerName=flask-signup,containerPort=5000 --role ecs-service-role --desired-count 0
+{
+    "service": {
+        "status": "ACTIVE",
+        "taskDefinition": "arn:aws:ecs:us-east-1:123456789012:task-definition/flask-signup:1",
+        "desiredCount": 0,
+        "serviceName": "flask-signup-service",
+        "clusterArn": "arn:aws:ecs:us-east-1:123456789012:cluster/default",
+        "serviceArn": "arn:aws:ecs:us-east-1:123456789012:service/flask-signup-service",
+        "runningCount": 0
+    }
+}
+
+Configure the Jenkins build
+
+#!/bin/bash
+SERVICE_NAME="flask-signup-service"
+IMAGE_VERSION="v_"${BUILD_NUMBER}
+TASK_FAMILY="flask-signup"
+
+# Create a new task definition for this build
+sed -e "s;%BUILD_NUMBER%;${BUILD_NUMBER};g" flask-signup.json > flask-signup-v_${BUILD_NUMBER}.json
+aws ecs register-task-definition --family flask-signup --cli-input-json file://flask-signup-v_${BUILD_NUMBER}.json
+
+# Update the service with the new task definition and desired count
+TASK_REVISION=`aws ecs describe-task-definition --task-definition flask-signup | egrep "revision" | tr "/" " " | awk '{print $2}' | sed 's/"$//'`
+DESIRED_COUNT=`aws ecs describe-services --services ${SERVICE_NAME} | egrep "desiredCount" | tr "/" " " | awk '{print $2}' | sed 's/,$//'`
+if [ ${DESIRED_COUNT} = "0" ]; then
+    DESIRED_COUNT="1"
+fi
+
+aws ecs update-service --cluster default --service ${SERVICE_NAME} --task-definition ${TASK_FAMILY}:${TASK_REVISION} --desired-count ${DESIRED_COUNT}
+
+
